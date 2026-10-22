@@ -1,0 +1,7 @@
+{
+  "name": "kirtle-standard",
+  "private": true,
+  "version": "1.0.0",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": { "start": "node server/start.mjs", "setup:accounts": "node server/setup.mjs", "test": "node --test tests/*.test.mjs" }
+}
