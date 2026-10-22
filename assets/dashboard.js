@@ -8,6 +8,7 @@
     $('workspace').hidden = true; $('logout').hidden = true; $('login-view').hidden = false;
     $('admin-panel').hidden = true; $('admin-tab').hidden = true;
     $('users').replaceChildren(); $('activity').replaceChildren();
+    window.dispatchEvent(new CustomEvent('kirtle-signed-out'));
     document.querySelectorAll('form').forEach(f=>f.reset());
   }
   async function api(path, method = 'GET', data) {
@@ -25,6 +26,7 @@
     return result;
   }
   function showAccount() {
+    $('jobs-panel').hidden=true; $('jobs-tab').setAttribute('aria-pressed','false');
     $('account-panel').hidden = false; $('admin-panel').hidden = true;
     $('account-tab').setAttribute('aria-pressed','true'); $('admin-tab').setAttribute('aria-pressed','false');
   }
@@ -35,7 +37,8 @@
     $('role-label').textContent = user.role === 'admin' ? 'ADMINISTRATOR WORKSPACE' : 'OWNER WORKSPACE';
     $('admin-tab').hidden = user.role !== 'admin';
     $('account-form').reset(); $('account-username').value = user.username;
-    $('login-form').reset(); showAccount();
+    $('login-form').reset();
+    window.dispatchEvent(new CustomEvent('kirtle-signed-in',{detail:{api,status,user}}));
   }
   function formTask(id, action) {
     $(id).addEventListener('submit', async event => {
@@ -93,7 +96,7 @@
   }
   $('admin-tab').addEventListener('click',async()=>{
     try {
-      await loadAdmin();$('account-panel').hidden=true;$('admin-panel').hidden=false;$('manage-form').hidden=true;
+      await loadAdmin();$('jobs-panel').hidden=true;$('jobs-tab').setAttribute('aria-pressed','false');$('account-panel').hidden=true;$('admin-panel').hidden=false;$('manage-form').hidden=true;
       $('account-tab').setAttribute('aria-pressed','false');$('admin-tab').setAttribute('aria-pressed','true');status('');
     }catch(e){status(e.message,true);}
   });

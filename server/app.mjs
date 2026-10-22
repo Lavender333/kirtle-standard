@@ -1,3 +1,4 @@
+import { initializeJobs, createRequest, listJobs, getJob, reviewJob, updateJob, linkRequest } from './jobs.mjs';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
@@ -35,6 +36,7 @@ export function openDatabase(path) {
       target TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);
   `);
+  initializeJobs(db);
   return db;
 }
 function fail(status, message) { throw Object.assign(new Error(message), { status }); }
@@ -54,7 +56,7 @@ export function createAccount(db, username, password, role) {
 }
 const publicUser = u => ({ id: u.id, username: u.username, role: u.role, disabled: !!u.disabled, createdAt: u.created_at });
 
-export function createApp({ db, origin }) {
+export function createApp({ db, origin, square }) {
   const site = new URL(origin);
   if (site.origin !== origin || (site.protocol !== 'https:' && !['localhost','127.0.0.1','[::1]'].includes(site.hostname))) {
     throw new Error('APP_ORIGIN must be an HTTPS origin, or HTTP localhost for development.');
@@ -96,7 +98,7 @@ export function createApp({ db, origin }) {
     const chunks = []; let size = 0;
     for await (const chunk of req) {
       size += chunk.length;
-      if (size > 8192) fail(413, 'Request is too large.');
+      if (size > 32768) fail(413, 'Request is too large.');
       chunks.push(chunk);
     }
     try { const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error(); return parsed; }
@@ -127,7 +129,14 @@ export function createApp({ db, origin }) {
       res.setHeader('Cache-Control', 'no-store');
       const write = !['GET','HEAD'].includes(req.method);
       if (write && req.headers.origin !== origin) fail(403, 'Please use this website to submit changes.');
-      if (write) limited('write:' + req.socket.remoteAddress, 100);
+      if (write) limited('write:' + req.socket.remoteAddress, 1000);
+      if (path === '/api/requests' && req.method === 'POST') {
+        limited('intake:' + req.socket.remoteAddress, 15);
+        const data = await body(req);
+        if (data.website) { json(res,200,{message:'Request received.'}); return; }
+        const id = createRequest(db,data);
+        json(res,201,{reference:id,message:'Your cleaning details are saved. We will review and confirm the appointment; no payment was taken.'}); return;
+      }
       if (path === '/api/login' && req.method === 'POST') {
         limited('login-ip:' + req.socket.remoteAddress, 30);
         const data = await body(req);
@@ -146,6 +155,26 @@ export function createApp({ db, origin }) {
       const user = session(req);
       if (!user) fail(401, 'Please log in to continue.');
       if (write && req.headers['x-csrf-token'] !== user.csrf) fail(403, 'Your session changed. Refresh and try again.');
+      if (path === '/api/jobs' && req.method === 'GET') { json(res,200,{jobs:listJobs(db)}); return; }
+      if (path === '/api/square/status' && req.method === 'GET') { json(res,200,square?.status() || {configured:false,lastSuccess:null,lastError:''}); return; }
+      if (path === '/api/square/sync' && req.method === 'POST') {
+        limited('square-sync', 5);
+        if (!square) fail(503,'Square is not connected yet.');
+        const result=await square.sync();
+        if (!session(req)) fail(401,'Please log in again.');
+        json(res,200,result); return;
+      }
+      const jobRoute=path.match(/^\/api\/jobs\/([a-zA-Z0-9-]+)(?:\/(review|link))?$/);
+      if (jobRoute) {
+        if (req.method==='GET' && !jobRoute[2]) { json(res,200,{job:getJob(db,jobRoute[1])}); return; }
+        if (req.method==='PATCH') {
+          const data=await body(req);
+          if (!session(req)) fail(401,'Please log in again.');
+          const job=jobRoute[2]==='review'?reviewJob(db,jobRoute[1],data,user.username):jobRoute[2]==='link'?linkRequest(db,jobRoute[1],data,user.username):updateJob(db,jobRoute[1],data,user.username);
+          audit(user.username,jobRoute[2]==='review'?'Reviewed cleaning plan':jobRoute[2]==='link'?'Linked client intake':'Updated cleaning work',job.id);
+          json(res,200,{job}); return;
+        }
+      }
       if (path === '/api/me' && req.method === 'GET') { json(res,200,{user:publicUser(user),csrf:user.csrf}); return; }
       if (path === '/api/logout' && req.method === 'POST') {
         db.prepare('DELETE FROM sessions WHERE id=?').run(user.session_id);
