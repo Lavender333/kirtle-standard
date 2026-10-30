@@ -1,6 +1,24 @@
 # Kirtle Standard
 
-Cleaning-service website with hosted Square scheduling and a small account service. Public pages can remain static; secure owner/admin accounts use one Node.js 24+ process and a SQLite file. There are no third-party runtime packages or external database accounts to connect.
+Cleaning-service website with Square scheduling, owner/admin accounts, and private cleaning-job management. Production uses Supabase Postgres and the `kirtle-api` Edge Function; public pages can stay on GitHub Pages. The original Node.js 24+ / SQLite server remains available for local development. Both deployments share the same validation, account, and cleaning-workflow code.
+
+## Supabase production deployment
+
+Target project: `ywuylrdtimpqhhtipqnh`, in Kirtle Cleaning. Deploy the backend **before** publishing the frontend changes. A configured URL does not prove a successful deployment.
+
+1. Apply `supabase/migrations/20261029205300_kirtle_private_backend.sql` to the target database using the authenticated Supabase CLI or SQL Editor. It creates a separate `kirtle_private` schema; it does not replace existing tables. Inspect the schema first and apply this initial migration once. Keep this schema out of the Data API's exposed schemas. Every table has RLS enabled, and the public, anon, and authenticated roles have no access. Only the server database connection can access these tables.
+2. Deploy `kirtle-api` with `supabase functions deploy kirtle-api --project-ref ywuylrdtimpqhhtipqnh --use-api`. The checked-in function configuration disables Supabase JWT verification because this application has its own username/password sessions. Public intake, login, and health are the only public operations; customer records and administrator operations require a server-validated session and role. The function uses the platform-provided `SUPABASE_DB_URL`; do not put it or any service key into the website.
+3. Provision the initial owner and administrator privately: set `DATABASE_URL` to a Supabase TLS database connection string, then run `npm run setup:supabase` with the same JSON stdin format described below. No default passwords, public signup, or public bootstrap endpoint exists. The command is transactional, refuses to replace any existing accounts, and does not print passwords. Supabase dashboard sign-in is separate from the website's owner/admin sign-in. Existing SQLite accounts and jobs are **not automatically migrated**; preserve the old database and plan an explicit migration if it contains real data.
+4. `assets/api-config.js` routes `kirtlecleans.com` and `www.kirtlecleans.com` to the function. Other hosts use the same-origin local server by default. If adding another production host, update both this file and the server-only `KIRTLE_ALLOWED_ORIGINS` setting. CORS is restricted to exact HTTPS origins; no wildcard is used. Verify the website's HTTPS certificate before clients submit details or log in.
+5. Verify `GET /functions/v1/kirtle-api/api/health` returns `{ "ok": true }`, then check login, intake submission, review, checklist reload persistence, admin visibility, and logout on the real site. Use clearly labeled test data and remove it through an approved maintenance procedure.
+
+The database is authoritative: request idempotency, account throttling, sessions, checklist revisions, sync timestamps, and sync errors persist across Edge Function instances. Cross-origin owner sessions use random, eight-hour bearer tokens kept in the current browser tab's `sessionStorage`; only token hashes are stored server-side. Passwords are never stored in the browser. Account changes and disabling an owner revoke their sessions. The local Node server continues using HttpOnly cookies. Writes require matching origins and CSRF tokens in both modes.
+
+Edge requests share a persistent conservative rate-limit bucket (15 intake attempts and 30 login attempts per 15 minutes, plus per-username login limits); caller-controlled forwarding headers cannot bypass it. A busier deployment should add verified edge IP handling or a challenge service before raising limits. Transactional mutations use a database lock, and checklist updates also compare revisions atomically.
+
+Square syncing on the Edge deployment is **manual**, through the authenticated dashboard's Sync button, after the server-only Square secrets are configured. The optional Node deployment also runs its five-minute sync timer. No scheduled Edge sync is configured by this change. The website request workflow works independently of Square; requesting a visit does not reserve a slot, collect payment, or send email.
+
+Validation: `npm ci`, `npm test`, and `npm run check:edge`. Tests include PostgreSQL execution through PGlite, deny-public-access checks, the real Web Request handler, account lifecycle and role isolation, durable intake, optimistic concurrency, and SQLite regression coverage. They do not verify live Square credentials or merchant payment settings.
 
 ## Pages
 - `index.html`: public website.
@@ -39,7 +57,7 @@ Each website intake starts as **Needs review**, not a confirmed booking. Staff v
 
 Checklists are generated on the server from the approved service, room counts, and extras: arrival/preparation, high surfaces, kitchen, bathrooms, living spaces/bedrooms, extras, floors, final walkthrough. Special requests are shown prominently for staff review; free-text exclusions are not silently interpreted. Staff must adjust room counts and instructions for rooms to skip. Checkmarks and notes are stored in SQLite and visible across devices to both roles. Concurrent edits return a refresh warning rather than overwriting a newer version. Complete requires all checklist items checked; record unfinished work in notes and keep the job in progress.
 
-Website intake uses a per-submission idempotency key, validation, same-origin checks, and request throttling. A success response is shown only after the database save. It does not charge or reserve a slot, and does not send email. There is no public endpoint to read client details. Public/static hosting without the account server cannot accept intake.
+Website intake uses a per-submission idempotency key, validation, same-origin checks, and request throttling. A success response is shown only after the database save. It does not charge or reserve a slot, and does not send email. There is no public endpoint to read client details. Static hosting must use the configured Supabase API; a static-only preview without that API or the local account server cannot accept intake.
 
 ## Connect Square appointments to this website
 
@@ -61,7 +79,7 @@ API documentation: [List bookings](https://developer.squareup.com/reference/squa
 
 ## Run locally
 
-Use Node.js 24 or later. `npm start` runs at `http://localhost:8000`; open `/dashboard.html`. No dependency installation is needed. `npm test` runs account, job, intake, authorization, checklist, and mocked Square integration tests. Browser checks should also exercise mobile intake, owner approval/checkmarks, reload persistence, and administrator visibility. The tests do not use real clients or make live Square requests.
+Use Node.js 24 or later. `npm start` runs at `http://localhost:8000`; open `/dashboard.html`. Run `npm ci` to install the pinned development/deployment dependencies. `npm test` runs account, job, intake, authorization, checklist, and mocked Square integration tests. Browser checks should also exercise mobile intake, owner approval/checkmarks, reload persistence, and administrator visibility. The tests do not use real clients or make live Square requests.
 
 The first run creates `.data/accounts.sqlite`. To put private data elsewhere, set `DATA_DIR` to a private writable directory. Keep the SQLite file, WAL, and shared-memory files out of static hosting and backups available only to authorized operators.
 
@@ -71,7 +89,7 @@ Passwords are not included in the repository, Docker image, documentation, or cl
 
 ## Hosting
 
-GitHub Pages cannot run the login/account service. To activate these accounts publicly, run the Node service on a host with HTTPS and persistent disk. It serves both the public website and `/api` from the same origin. Do not publish the SQLite database on GitHub Pages. The GitHub Pages-only dashboard shows that the account service is unavailable.
+GitHub Pages serves the frontend and uses the Supabase Edge Function described above for accounts and intake. For an alternative self-hosted deployment, set `KIRTLE_API_BASE` to an empty string in the frontend configuration and run the Node service on a host with HTTPS and persistent disk. It serves both the public website and `/api` from the same origin. Do not publish the SQLite database on GitHub Pages. The GitHub Pages-only dashboard shows that the account service is unavailable.
 
 Set `APP_ORIGIN` to the exact HTTPS site origin (no trailing slash), `PORT` to the service port, `HOST=0.0.0.0` when needed by the host, and `DATA_DIR` to the mounted private persistent directory. The HTTPS reverse proxy must preserve the public Host header. The service rejects non-local HTTP origins and requests from another Host/Origin. Use one service instance per SQLite disk; multi-instance scaling requires a shared database design. Back up the database using SQLite's backup mechanism or while the service is stopped.
 
