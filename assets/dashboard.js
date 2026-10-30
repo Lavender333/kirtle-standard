@@ -4,6 +4,7 @@
   let user, csrf, managedId;
   function status(message, error = false) { $('status').textContent = message; $('status').classList.toggle('error', error); }
   function signedOut() {
+    window.KirtleAPI.clear();
     user = null; csrf = null; managedId = null;
     $('workspace').hidden = true; $('logout').hidden = true; $('login-view').hidden = false;
     $('admin-panel').hidden = true; $('admin-tab').hidden = true;
@@ -13,7 +14,7 @@
   }
   async function api(path, method = 'GET', data) {
     let response;
-    try { response = await fetch(path, { method, credentials:'same-origin', cache:'no-store', headers: {
+    try { response = await window.KirtleAPI.fetch(path, { method, credentials:'same-origin', cache:'no-store', headers: {
       'Content-Type':'application/json', ...(csrf ? {'X-CSRF-Token':csrf} : {})
     }, ...(data ? {body:JSON.stringify(data)} : {}) }); }
     catch { throw Error('Unable to connect. Check your connection and try again.'); }

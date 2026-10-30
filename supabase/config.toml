@@ -1,0 +1,7 @@
+project_id = "kirtle-standard"
+
+[functions.kirtle-api]
+# Public intake and login are intentionally public. Every private route validates
+# a hashed server-side session and role; writes also require origin and CSRF checks.
+verify_jwt = false
+entrypoint = "./functions/kirtle-api/index.ts"
